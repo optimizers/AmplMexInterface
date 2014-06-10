@@ -1,0 +1,939 @@
+head	1.9;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.9
+date	2003.12.04.16.27.26;	author michael;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	2001.04.19.20.38.10;	author mpf;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	2001.04.19.19.30.22;	author mpf;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	2001.04.19.19.28.33;	author mpf;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	2001.04.16.16.31.29;	author mpf;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	2001.04.16.02.45.04;	author mpf;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2001.04.12.18.08.00;	author mpf;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2001.04.04.18.15.45;	author mpf;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2001.04.04.02.15.56;	author mpf;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@This is now Todd Munson's version.
+Close to Ample's original version,
+with some trapping for domain errors.
+@
+text
+@/****************************************************************
+Copyright (C) 1997-2000 Lucent Technologies
+All Rights Reserved
+
+Permission to use, copy, modify, and distribute this software and
+its documentation for any purpose and without fee is hereby
+granted, provided that the above copyright notice appear in all
+copies and that both that the copyright notice and this
+permission notice and warranty disclaimer appear in supporting
+documentation, and that the name of Lucent or any of its entities
+not be used in advertising or publicity pertaining to
+distribution of the software without specific, written prior
+permission.
+
+LUCENT DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
+INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS.
+IN NO EVENT SHALL LUCENT OR ANY OF ITS ENTITIES BE LIABLE FOR ANY
+SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER
+IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
+****************************************************************/
+
+/* Sample mex function (in MATLAB 5.x format) for getting functions,
+   gradients, and sparse Hessians from an AMPL .nl file.  Start with
+
+	[x,bl,bu,v,cl,cu] = spamfunc('stub')
+
+   or, for complementarity problems,
+
+	[x,bl,bu,v,cl,cu,cv] = spamfunc('stub')
+
+   to read in a problem (discarding the previous problem, if any).
+   The return values are:
+
+	x = primal initial guess
+	v = dual initial guess
+	bl, bu = lower and upper bounds on x
+	cl, cu = lower and upper bounds on c (the constraint bodies).
+	cv variables complementing constraints:  if cv(i) > 0, then
+		constraint i complements x(cv(i)); otherwise
+		constraint i is an ordinary constraint.
+
+   Then
+
+	[f,c] = spamfunc(x,0)
+
+   gives the function (f) and constraint bodies (c) at x;
+
+	[g,Jac] = spamfunc(x,1)
+
+   gives the gradient g of f, the Jacobian matrix J of c, and
+
+	W = spamfunc(v)
+
+   gives the Hessian W of the Lagrangian function L = f + v*c
+   (at the last x at which spamfunc(x,1) was called).
+
+   After finding optimal values for x and v,
+
+	spamfunc('solution message',x,v)
+
+   to write a stub.sol file.
+*/
+
+#include "mex.h"
+#undef printf
+#include "asl_pfgh.h"
+
+#ifdef _WIN32
+/* Omit sw "signal" catching and x86 precision adjustment. */
+#define ASL_NO_FP_INIT
+#include "fpinit.c"
+#endif /* _WIN32 */
+
+static char msgbuf[256];
+
+ static real*
+sizechk(const mxArray *mp, char *who, fint m)
+{
+	int m1, n1;
+	m1 = mxGetM(mp);
+	n1 = mxGetN(mp);
+	if (m1 != m || n1 != 1 && m1) {
+		sprintf(msgbuf,
+			"Expected %s to be %d x 1 rather than %d x %d\n",
+			who, m, m1, n1);
+		mexErrMsgTxt(msgbuf);
+		}
+	return mxGetPr(mp);
+	}
+
+ static void
+at_end(void)
+{
+	if (cur_ASL)
+		ASL_free(&cur_ASL);
+	}
+
+ static void
+usage(void)
+{
+	mexErrMsgTxt("spamfunc usage:\n\n\
+	[x,bl,bu,v,cl,cu] = spamfunc('stub')\nor\n\
+	[x,bl,bu,v,cl,cu,cv] = spamfunc('stub')\nor\n\
+	[f,c] = spamfunc(x,0)\nor\n\
+	[g,Jac] = spamfunc(x,1)\nor\n\
+	W = spamfunc(v)\nor\n\
+	spamfunc('solution message',x,v)\nor\n\
+	spamfunc('solution message',x,v,solve_result_num)\nwith\n\
+	x = primal, v = dual variables");
+	}
+
+ void
+mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
+{
+	FILE *nl;
+	char *buf1, buf[512], *what, **whatp;
+	static fint n, nc, nz;
+	fint i, nerror;
+	real *J1, *W, *c, *f, *g, *v, *t, *x;
+	cgrad *cg, **cgp;
+	Jmp_buf err_jmp0;
+	ASL_pfgh *asl = (ASL_pfgh*)cur_ASL;
+	static fint nhnz;
+	static real *Hsp;
+	real *H, *He;
+	int *Ir, *Jc;
+	fint *hcs, *hr;
+	static char ignore_complementarity[] =
+		"Warning: ignoring %d complementarity conditions.\n";
+
+	if (nrhs == 1 && mxIsChar(prhs[0])) {
+		if (nlhs < 6 || nlhs > 7)
+			usage();
+		if (mxGetString(prhs[0], buf1 = buf, sizeof(buf)))
+			mexErrMsgTxt("Expected 'stub' as argument\n");
+		at_end();
+		mexAtExit(at_end);
+		asl = (ASL_pfgh*)ASL_alloc(ASL_read_pfgh);
+		return_nofile = 1;
+		if (!(nl = jac0dim(buf1,strlen(buf)))) {
+			sprintf(msgbuf, "Can't open %.*s\n",
+				sizeof(msgbuf)-20, buf);
+			mexErrMsgTxt(msgbuf);
+			}
+		if (n_obj <= 0)
+			printf("Warning: objectve == 0\n");
+		n = n_var;
+		nc = n_con;
+		nz = nzc;
+		X0 = mxGetPr(plhs[0] = mxCreateDoubleMatrix(n, 1, mxREAL));
+		LUv = mxGetPr(plhs[1] = mxCreateDoubleMatrix(n, 1, mxREAL));
+		Uvx = mxGetPr(plhs[2] = mxCreateDoubleMatrix(n, 1, mxREAL));
+		pi0 = mxGetPr(plhs[3] = mxCreateDoubleMatrix(nc, 1, mxREAL));
+		LUrhs = mxGetPr(plhs[4] = mxCreateDoubleMatrix(nc, 1, mxREAL));
+		Urhsx = mxGetPr(plhs[5] = mxCreateDoubleMatrix(nc, 1, mxREAL));
+		if (nlhs == 7) {
+			cvar = (int*)M1alloc(nc*sizeof(int));
+			plhs[6] = mxCreateDoubleMatrix(nc, 1, mxREAL);
+			x = mxGetPr(plhs[6]);
+			}
+		else if (n_cc)
+			printf(ignore_complementarity, n_cc);
+		pfgh_read(nl, ASL_findgroups);
+		if (nlhs == 7)
+			for(i = 0; i < nc; i++)
+				x[i] = cvar[i];
+
+		/* Arrange to compute the whole sparese Hessian */
+		/* of the Lagrangian function (both triangles). */
+
+		nhnz = sphsetup(0, 0, nc > 0, 0);
+		Hsp = (real *)M1alloc(nhnz*sizeof(real));
+		return;
+		}
+
+	if (!asl)
+		mexErrMsgTxt("spamfunc(\"stub\") has not been called\n");
+	err_jmp1 = &err_jmp0;
+	what = "(?)";
+	whatp = &what;
+	if (nlhs == 2) {
+		if (nrhs != 2)
+			usage();
+		x = sizechk(prhs[0],"x",n);
+		t = sizechk(prhs[1],"0 or 1", 1);
+		if (setjmp(err_jmp0.jb)) {
+			sprintf(msgbuf, "Trouble evaluating %s\n", *whatp);
+			mexErrMsgTxt(msgbuf);
+			}
+		if (t[0] == 0.) {
+			f = mxGetPr(plhs[0] = mxCreateDoubleMatrix(1, 1, mxREAL));
+			c = mxGetPr(plhs[1] = mxCreateDoubleMatrix(nc, 1, mxREAL));
+			what = "f";
+			*f = objval(0, x, 0);
+			what = "c";
+			conval(x, c, 0);
+			return;
+			}
+		g = mxGetPr(plhs[0] = mxCreateDoubleMatrix(n, 1, mxREAL));
+		J1 = mxGetPr(plhs[1] = mxCreateSparse(nc, n, nz, mxREAL));
+		what = "g";
+		objgrd(0, x, g, 0);
+		if (nc) {
+			what = "J";
+			jacval(x, J1, 0);
+			Ir = mxGetIr(plhs[1]);
+			memcpy(mxGetJc(plhs[1]), A_colstarts, (n+1)*sizeof(int));
+			cgp = Cgrad;
+			for(i = 0; i < nc; i++)
+				for(cg = *cgp++; cg; cg = cg->next)
+					Ir[cg->goff] = i;
+			}
+		return;
+		}
+	if (nlhs == 0 && (nrhs == 3 || nrhs == 4)) {
+		/* eval2('solution message', x, v): x = primal, v = dual */
+		/* optional 4th arg = solve_result_num */
+		if (!mxIsChar(prhs[0]))
+			usage();
+		x = sizechk(prhs[1],"x",n);
+		v = sizechk(prhs[2],"v",nc);
+		if (mxGetString(prhs[0], buf, sizeof(buf)))
+			mexErrMsgTxt(
+			 "Expected 'solution message' as first argument\n");
+		solve_result_num = nrhs == 3 ? -1 /* unknown */
+			: (int)*sizechk(prhs[3],"solve_result_num",1);
+		write_sol(buf, x, v, 0);
+		return;
+		}
+	if (nlhs != 1 || nrhs != 1)
+		usage();
+
+	if (setjmp(err_jmp0.jb)) {
+		sprintf(msgbuf, "Trouble evaluating %s\n", *whatp);
+		mexErrMsgTxt(msgbuf);
+		}
+	v = sizechk(prhs[0],"v",nc);
+	W = mxGetPr(plhs[0] = mxCreateSparse(n, n, nhnz, mxREAL));
+
+	what = "W";
+	sphes(H = Hsp, 0, 0, v);
+
+	/* Expand the Hessian lower triangle into the full Hessian... */
+
+	Ir = mxGetIr(plhs[0]);
+	Jc = mxGetJc(plhs[0]);
+	hcs = sputinfo->hcolstarts;
+	hr = sputinfo->hrownos;
+	for(i = 0; i <= n; i++)
+		Jc[i] = hcs[i];
+	He = H + hcs[n];
+	while(H < He) {
+		*W++ = *H++;
+		*Ir++ = *hr++;
+		}
+	}
+@
+
+
+1.8
+log
+@Undid usage errors.
+@
+text
+@d1 65
+a65 15
+//-----------------------------------------------------------------------
+// amplMex.c
+//-----------------------------------------------------------------------
+//
+//-----------------------------------------------------------------------
+// 17 Feb 01:  Original version.
+//             Derived from AMPL examples directory, spamfunc.c
+//-----------------------------------------------------------------------
+
+// Following code inserts RCS info into object file
+static char *rcsid="$Id: spamfunc.c,v 1.7 2001-04-19 12:30:22-07 mpf Exp mpf $";
+#if __GNUC__ == 2
+#define USE(var) static void * use_##var = (&use_##var, (void *) &var) 
+USE (rcsid);
+#endif
+d69 7
+a75 1
+#include "asl_pfg.h"
+a76 1
+// Global variables
+d79 2
+a80 2
+
+static real* sizechk(const mxArray *mp, char *who, fint m)
+d82 11
+a92 10
+  int m1, n1;
+  m1 = mxGetM(mp);
+  n1 = mxGetN(mp);
+  if (m1 != m || n1 != 1 && m1) {
+     sprintf(msgbuf, "Expected %s to be %d x 1 rather than %d x %d\n",
+	     who, m, m1, n1);
+     mexErrMsgTxt(msgbuf);
+  }
+  return mxGetPr(mp);
+}
+d94 2
+a95 2
+// Exit function
+static void at_end(void)
+d97 3
+a99 2
+  if (cur_ASL) ASL_free(&cur_ASL);
+}
+d101 2
+a102 2
+// Spamfunc usage
+static void usage(void)
+d104 6
+a109 4
+  mexErrMsgTxt("spamfunc usage:\n\n\
+	[x, bl, bu, pi, cl, cu, nnCon, nnJac] = spamfunc('stub')\nor\n\
+	[f, g]   = spamfunc(x, 0)\nor\n\
+	[c, Jac] = spamfunc(x, 1)\nor\n\
+d113 1
+a113 1
+}
+d115 2
+a116 3
+// MEX interface
+void mexFunction(int nlhs, mxArray       *plhs[],
+		 int nrhs, const mxArray *prhs[])
+d118 142
+a259 136
+  FILE        *stubFile;
+  char        *stubName, buf[512], *what, **whatp;
+  fint        option, i, nerror;
+  real        *J1, *c, *f, *g, *v, *x;
+  cgrad       *cg, **cgp;
+  Jmp_buf     err_jmp0;
+  ASL_pfg     *asl = (ASL_pfg*)cur_ASL;
+  int         *Ir, *Jc;
+  static fint n, nc, ne;
+  
+  //---------------------------------------------------------------------
+  // Initialize problem "stub"
+  // [x, bl, bu, pi, cl, cu, nnCon] = spamfunc('stub')
+  //---------------------------------------------------------------------
+  if (nrhs == 1 && mxIsChar(prhs[0])) {
+    
+     if (nlhs != 8) usage(); // Wrong # LHS parameters
+
+     // Read name of stub file
+     if (mxGetString(prhs[0], stubName = buf, sizeof(buf))) {
+         mexErrMsgTxt("Expected 'stub' as argument\n");
+     }
+
+     // Cleanup dynamic workspace
+     at_end();
+
+     // Register the cleanup function
+     mexAtExit(at_end);
+
+     // Allocate the ASL
+     asl = (ASL_pfg*)ASL_alloc(ASL_read_fg);
+
+     return_nofile = 1;
+
+     // Determine problem dimensions
+     stubFile = jac0dim(stubName, strlen(buf));
+     if (!stubFile) {
+         sprintf(msgbuf, "Can't open %.*s\n", sizeof(msgbuf)-20, buf);
+	 mexErrMsgTxt(msgbuf);
+     }
+
+     if (n_obj <= 0) mexWarnMsgTxt("Warning: objective == 0\n");
+
+     n     = n_var; // No. of variables
+     nc    = n_con; // No. of constraints
+     ne    = nzc;
+     X0    = mxGetPr(plhs[0] = mxCreateDoubleMatrix(n , 1, mxREAL));
+     LUv   = mxGetPr(plhs[1] = mxCreateDoubleMatrix(n , 1, mxREAL));
+     Uvx   = mxGetPr(plhs[2] = mxCreateDoubleMatrix(n , 1, mxREAL));
+     pi0   = mxGetPr(plhs[3] = mxCreateDoubleMatrix(nc, 1, mxREAL));
+     LUrhs = mxGetPr(plhs[4] = mxCreateDoubleMatrix(nc, 1, mxREAL));
+     Urhsx = mxGetPr(plhs[5] = mxCreateDoubleMatrix(nc, 1, mxREAL));
+
+     // Read the stub file
+     fg_read(stubFile, 0);
+
+     // Pass out nnCon, nnJac
+     plhs[6] = mxCreateScalarDouble( (double) nlc );
+     plhs[7] = mxCreateScalarDouble( (double) nlvc);
+
+     // Done.  Back to Matlab
+     return;
+  }
+  
+  if (!asl) mexErrMsgTxt("spamfunc(\"stub\") has not been called\n");
+
+  nerror   = -1;
+  err_jmp1 = &err_jmp0;
+  what     = "(?)";
+  whatp    = &what;
+  
+  //---------------------------------------------------------------------
+  // Function and gradient evaluations
+  //---------------------------------------------------------------------
+  if (nrhs == 2) {
+
+      if (nlhs < 1 || nlhs > 2) usage();
+
+      x      =        sizechk(prhs[0], "x"     , n);
+      option = (int) *sizechk(prhs[1], "0 or 1", 1);
+
+      if (setjmp(err_jmp0.jb)) {
+	  sprintf(msgbuf, "Trouble evaluating %s\n", *whatp);
+	  mexErrMsgTxt(msgbuf);
+      }
+
+      //-----------------------------------------------------------------
+      // FunObj:  [f, g] = spamfunc(x, 0)
+      //-----------------------------------------------------------------
+      if (option == 0) {
+
+	  plhs[0] = mxCreateDoubleMatrix(1, 1, mxREAL);
+	  plhs[1] = mxCreateDoubleMatrix(n, 1, mxREAL);
+
+	  f       =  mxGetPr(plhs[0]);
+	  what    =  "f";
+	  *f      =  objval(0, x, &nerror);
+	  if (nlhs == 2) {
+	    g      = mxGetPr(plhs[1]);
+	    what   =  "g";
+	    objgrd(0, x, g, &nerror);
+	  }
+	  return;
+      }
+	     
+      //-----------------------------------------------------------------
+      // FunCon:  [c, J] = spamfunc(x, 1)
+      //-----------------------------------------------------------------
+      plhs[0] = mxCreateDoubleMatrix(n_con, 1, mxREAL);
+      c       = mxGetPr(plhs[0]);
+      what    = "c";
+      conval(x, c, &nerror);
+
+      if (nlhs == 2) {
+          plhs[1] = mxCreateSparse(n_con, n_var, ne, mxREAL);
+	  if (n_con) {
+  	     J1   = mxGetPr(plhs[1]);
+	     Ir   = mxGetIr(plhs[1]);
+	     Jc   = mxGetJc(plhs[1]);
+	     what = "J";
+	     jacval(x, J1, &nerror);
+	     memcpy(Jc, A_colstarts, (n+1) * sizeof(int));
+
+	     cgp   = Cgrad;
+	     for(i = 0; i < n_con; i++)
+	         for(cg = *cgp++; cg; cg = cg->next)
+		     Ir[cg->goff] = i;
+	  }
+      }
+      return;
+  }
+
+  // If got to this point, spamfunc called incorrectly
+  usage();
+
+}
+@
+
+
+1.7
+log
+@Corrected usage message.
+@
+text
+@d11 1
+a11 1
+static char *rcsid="$Id: spamfunc.c,v 1.6 2001-04-19 12:28:33-07 mpf Exp mpf $";
+a79 1
+         usage();
+a97 1
+	 usage();
+d124 2
+a125 4
+  if (!asl) {
+     usage();
+     mexErrMsgTxt("spamfunc(\"stub\") has not been called\n");
+  }
+@
+
+
+1.6
+log
+@Added usage message to most error returns.
+@
+text
+@d11 1
+a11 1
+static char *rcsid="$Id: spamfunc.c,v 1.5 2001-04-16 09:31:29-07 mpf Exp mpf $";
+d48 1
+a48 1
+	[x, bl, bu, pi, cl, cu, nnCon] = spamfunc('stub')\nor\n\
+@
+
+
+1.5
+log
+@Passing out nnJac with initialization call.
+@
+text
+@d11 1
+a11 1
+static char *rcsid="$Id: spamfunc.c,v 1.4 2001-04-15 19:45:04-07 mpf Exp mpf $";
+d79 2
+a80 1
+     if (mxGetString(prhs[0], stubName = buf, sizeof(buf)))
+d82 1
+d99 1
+d126 4
+a129 1
+  if (!asl) mexErrMsgTxt("spamfunc(\"stub\") has not been called\n");
+@
+
+
+1.4
+log
+@Attempted to allow for evaluating only the first nnCon constraints and
+Jacobian variables.  Not as easy as I thought.  And does not seem to
+introduce any savings.  In fact, seems to slow things down!
+
+Some minor cleanup.
+@
+text
+@d11 1
+a11 1
+static char *rcsid="$Id: spamfunc.c,v 1.3 2001-04-12 11:08:00-07 mpf Exp mpf $";
+a20 3
+#define max(A,B)   ( (A) > (B) ? (A):(B) )
+#define min(A,B)   ( (A) < (B) ? (A):(B) )
+
+d24 1
+d38 1
+d44 1
+d56 1
+d76 1
+a76 1
+     if (nlhs != 7) usage(); // Wrong # LHS parameters
+d115 3
+a117 2
+     // Pass out no. of nonlinear constraints
+     plhs[6] = mxCreateScalarDouble( (double) nlc);
+@
+
+
+1.3
+log
+@Batch checkin.
+@
+text
+@d11 1
+a11 1
+static char *rcsid="$Id$";
+d21 4
+d48 3
+a50 3
+	[x,bl,bu,v,cl,cu,nnCon] = spamfunc('stub')\nor\n\
+	[f,g] = spamfunc(x,0)\nor\n\
+	[c,Jac] = spamfunc(x,1)\nor\n\
+d61 2
+a62 2
+  fint        i, nerror;
+  real        *J1, *c, *f, *g, *v, *t, *x;
+d66 1
+a66 1
+  int         *Ir;
+d69 1
+d71 2
+a72 1
+  // [x, bl, bu, v, cl, cu] = spamfunc('stub')
+d99 1
+a99 1
+     if (n_obj <= 0) printf("Warning: objective == 0\n");
+d115 1
+a115 1
+     plhs[6] = mxCreateScalarDouble(nlc);
+d127 1
+d129 1
+d131 1
+d133 3
+a135 2
+      x = sizechk(prhs[0],"x", n);
+      t = sizechk(prhs[1],"0 or 1", 1);
+d142 11
+a152 6
+      // FunObj
+      // [f, g] = spamfunc(x,0)
+      if (t[0] == 0.) {
+	  f    =  mxGetPr(plhs[0] = mxCreateDoubleMatrix( 1, 1, mxREAL));
+	  what =  "f";
+	  *f   =  objval(0, x, &nerror);
+d154 2
+a155 2
+	    g    = mxGetPr(plhs[1] = mxCreateDoubleMatrix(n, 1 , mxREAL));
+	    what =  "g";
+d161 7
+a167 3
+      // FunCon
+      // [c, J] = spamfunc(x,1)
+//      n_conjac[1] = nlc;
+a168 3
+      c    =  mxGetPr(plhs[0] = mxCreateDoubleMatrix(nc, 1, mxREAL));
+      what =  "c";
+      conval(x, c, &nerror);
+d170 13
+a182 10
+	  J1 = mxGetPr(plhs[1] = mxCreateSparse(nc, n, ne, mxREAL));
+	  if (nc) {
+	    what = "J";
+	    jacval(x, J1, &nerror);
+	    Ir   = mxGetIr(plhs[1]);
+	    memcpy(mxGetJc(plhs[1]), A_colstarts, (n+1)*sizeof(int));
+	    cgp  = Cgrad;
+	    for(i = 0; i < nc; i++)
+	      for(cg = *cgp++; cg; cg = cg->next)
+		  Ir[cg->goff] = i;
+d188 2
+a189 13
+  // Write solution out to stub.sol file.
+  if (nlhs == 0 && (nrhs == 3 || nrhs == 4)) {
+     /* eval2('solution message', x, v): x = primal, v = dual */
+     /* optional 4th arg = solve_result_num */
+     if (!mxIsChar(prhs[0])) usage();
+     x = sizechk(prhs[1],"x",n);
+     v = sizechk(prhs[2],"v",nc);
+     if (mxGetString(prhs[0], buf, sizeof(buf)))
+         mexErrMsgTxt("Expected 'solution message' as first argument\n");
+     solve_result_num = nrhs == 3 ? -1 : (int)*sizechk(prhs[3],"solve_result_num",1);
+     write_sol(buf, x, v, 0);
+     return;
+  }
+@
+
+
+1.2
+log
+@Split evaluations of objective and gradients into the SNOPT standard
+funCon and funObj.
+@
+text
+@d1 15
+a15 34
+/*
+  Start with
+  
+       [x,bl,bu,v,cl,cu] = spamfunc('stub')
+
+   to read in a problem (discarding the previous problem, if any).
+   The return values are:
+
+	x = primal initial guess
+	v = dual initial guess
+	bl, bu = lower and upper bounds on x
+	cl, cu = lower and upper bounds on c (the constraint bodies).
+
+   Then
+
+	[f,c]   = spamfunc(x,0)
+
+   gives the function (f) and constraint bodies (c) at x;
+
+	[g,Jac] = spamfunc(x,1)
+
+   gives the gradient g of f, the Jacobian matrix J of c, and
+
+	W = spamfunc(v)
+
+   gives the Hessian W of the Lagrangian function L = f + v*c
+   (at the last x at which spamfunc(x,1) was called).
+
+   After finding optimal values for x and v,
+
+	spamfunc('solution message',x,v)
+
+   to write a stub.sol file.
+*/
+d38 1
+a38 1
+  if (cur_ASL)  ASL_free(&cur_ASL);
+d45 2
+a46 2
+	[f,c] = spamfunc(x,0)\nor\n\
+	[g,Jac] = spamfunc(x,1)\nor\n\
+d55 8
+a62 8
+  FILE     *nl;
+  char     *buf1, buf[512], *what, **whatp;
+  fint     i, nerror;
+  real     *J1, *c, *f, *g, *v, *t, *x;
+  cgrad    *cg, **cgp;
+  Jmp_buf  err_jmp0;
+  ASL_pfg  *asl = (ASL_pfg*)cur_ASL;
+  int      *Ir;
+d68 2
+d71 2
+a72 3
+    if (nlhs != 7) usage(); // Wrong # LHS parameters
+
+     if (mxGetString(prhs[0], buf1 = buf, sizeof(buf)))
+d86 4
+a89 3
+     if (!(nl = jac0dim(buf1,strlen(buf)))) {
+         sprintf(msgbuf, "Can't open %.*s\n",
+		 sizeof(msgbuf)-20, buf);
+d93 1
+a93 1
+     if (n_obj <= 0) printf("Warning: objectve == 0\n");
+d106 1
+a106 1
+     fg_read(nl, ASL_findgroups);
+d148 2
+d154 1
+a154 1
+	  J1 = mxGetPr(plhs[1] = mxCreateSparse  (nc, n, ne, mxREAL));
+d162 2
+a163 2
+	        for(cg = *cgp++; cg; cg = cg->next)
+		    Ir[cg->goff] = i;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 4
+a4 8
+/* Sample mex function (in MATLAB 5.x format) for getting functions,
+   gradients, and sparse Hessians from an AMPL .nl file.  Start with
+
+	[x,bl,bu,v,cl,cu] = spamfunc('stub')
+
+   or, for complementarity problems,
+
+	[x,bl,bu,v,cl,cu,cv] = spamfunc('stub')
+a12 3
+	cv variables complementing constraints:  if cv(i) > 0, then
+		constraint i complements x(cv(i)); otherwise
+		constraint i is an ordinary constraint.
+d16 1
+a16 1
+	[f,c] = spamfunc(x,0)
+d38 1
+a38 1
+#include "asl_pfgh.h"
+d48 1
+a48 2
+     sprintf(msgbuf,
+	     "Expected %s to be %d x 1 rather than %d x %d\n",
+d63 1
+a63 2
+	[x,bl,bu,v,cl,cu] = spamfunc('stub')\nor\n\
+	[x,bl,bu,v,cl,cu,cv] = spamfunc('stub')\nor\n\
+a65 1
+	W = spamfunc(v)\nor\n\
+d74 2
+a75 5
+  FILE *nl;
+  char *buf1, buf[512], *what, **whatp;
+  static fint n, nc, nz;
+  static fint nhnz;
+  static real *Hsp;
+d77 1
+a77 2
+  real     *J1, *W, *c, *f, *g, *v, *t, *x;
+  real     *H, *He;
+d80 3
+a82 5
+  ASL_pfgh *asl = (ASL_pfgh*)cur_ASL;
+  int      *Ir,  *Jc;
+  fint     *hcs, *hr;
+  static char ignore_complementarity[] =
+    "Warning: ignoring %d complementarity conditions.\n";
+d88 1
+a88 1
+     if (nlhs < 6 || nlhs > 7) usage();
+d100 1
+a100 1
+     asl = (ASL_pfgh*)ASL_alloc(ASL_read_pfgh);
+d112 3
+a114 3
+     n     = n_var;
+     nc    = n_con;
+     nz    = nzc;
+a120 8
+     
+     if (nlhs == 7) {
+         cvar    = (int*)M1alloc(nc*sizeof(int));
+	 plhs[6] = mxCreateDoubleMatrix(nc, 1, mxREAL);
+	 x       = mxGetPr(plhs[6]);
+     }
+     else if (n_cc)
+         printf(ignore_complementarity, n_cc);
+d122 5
+a126 1
+     pfgh_read(nl, ASL_findgroups);
+d128 2
+a129 10
+     if (nlhs == 7)
+         for(i = 0; i < nc; i++)
+	     x[i] = cvar[i];
+     
+             /* Arrange to compute the whole sparse Hessian */
+             /* of the Lagrangian function (both triangles). */
+
+             nhnz = sphsetup(0, 0, nc > 0, 0);
+	     Hsp  = (real *)M1alloc(nhnz*sizeof(real));
+	     return;
+d139 2
+a140 2
+  if (nlhs == 2) {
+      if (nrhs != 2) usage();
+d149 2
+a150 2
+      // Evaluate the objective and constraint functions
+      // [f,c] = spamfunc(x,0)
+a152 1
+	  c    =  mxGetPr(plhs[1] = mxCreateDoubleMatrix(nc, 1, mxREAL));
+d155 5
+a159 2
+	  what =  "c";
+	  conval(x, c, &nerror);
+d162 18
+a179 16
+
+      // Evaluate the objective and constraint gradients
+      // [g,Jac] = spamfunc(x,1)
+      g  = mxGetPr(plhs[0] = mxCreateDoubleMatrix(n, 1 , mxREAL));
+      J1 = mxGetPr(plhs[1] = mxCreateSparse  (nc, n, nz, mxREAL));
+      what = "g";
+      objgrd(0, x, g, &nerror);
+      if (nc) {
+	 what = "J";
+	 jacval(x, J1, &nerror);
+	 Ir   = mxGetIr(plhs[1]);
+	 memcpy(mxGetJc(plhs[1]), A_colstarts, (n+1)*sizeof(int));
+	 cgp  = Cgrad;
+	 for(i = 0; i < nc; i++)
+	     for(cg = *cgp++; cg; cg = cg->next)
+	         Ir[cg->goff] = i;
+a197 21
+  if (nlhs != 1 || nrhs != 1) usage();
+
+  v = sizechk(prhs[0],"v",nc);
+  W = mxGetPr(plhs[0] = mxCreateSparse(n, n, nhnz, mxREAL));
+  
+  what = "W";
+  sphes(H = Hsp, 0, 0, v);
+
+  /* Expand the Hessian lower triangle into the full Hessian... */
+
+  Ir = mxGetIr(plhs[0]);
+  Jc = mxGetJc(plhs[0]);
+  hcs = sputinfo->hcolstarts;
+  hr = sputinfo->hrownos;
+  for(i = 0; i <= n; i++)
+      Jc[i] = hcs[i];
+  He = H + hcs[n];
+  while(H < He) {
+        *W++ = *H++;
+	*Ir++ = *hr++;
+  }
+@
