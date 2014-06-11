@@ -1,7 +1,7 @@
 #include "mex.h"
 #include "class_handle.hpp"
 #undef printf
-#include "asl_pfgh.h"
+#include "asl/asl_pfgh.h"
 
 // The class that we are interfacing to
 class dummy {
