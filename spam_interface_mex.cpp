@@ -1,7 +1,7 @@
-#include "mex.h"
 #include "class_handle.hpp"
 #undef printf
 #include "asl/asl_pfgh.h"
+#include "mex.h"
 
 // The class that we are interfacing to
 class dummy {
@@ -10,6 +10,16 @@ public:
     double *Hsp;
     mwSize n, nc, nz, nhnz;
 private:
+};
+
+extern "C" { 
+    double ddot_(
+    size_t *n,
+    double *dx,
+    size_t *incx,
+    double *dy,
+    size_t *incy
+);
 };
 
 static double*
@@ -298,28 +308,16 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
         double *x = getDense(prhs[2], "x", n);
         double *g = getDense(prhs[3], "g", n);
         double *v = getDense(prhs[4], "v", n);
-        double *y =  (double*)mxCalloc(nc, sizeof(double));
-        double *hv = (double*)mxCalloc(n , sizeof(double));
+        double *hv = (double*)mxMalloc(n*sizeof(double));
         double *gHiv = mxGetPr(plhs[0] = mxCreateDoubleMatrix(nlc, 1, mxREAL));
-
+        size_t one = 1;
+        size_t nn = n;
         xknown(x);
         for (i = 0; i < nlc; i++) {
-            // Set vector of multipliers to (0, 0, ..., -1, 0, ..., 0)
-            y[i] = -1.0;
-
-            // Compute Hi*v by setting OW to NULL.
-            hvpinit_ASL((ASL*)asl, ihd_limit, -1, NULL, y);
-            hvcomp(hv, v, -1, NULL, y);
-
-            // Compute dot product (g, Hi*v). Should use BLAS!
-            gHiv[i] = 0;
-            for (j=0; j<n; j++) gHiv[i] += hv[j]*g[j];
-
-            // Reset i-th multiplier.
-            y[i] = 0.0;
+            hvcompd(hv, v, i);
+            gHiv[i] = ddot_(&nn, hv, &one, g, &one);
         }
         xunknown();
-        mxFree(y);
         mxFree(hv);
         return;
     }

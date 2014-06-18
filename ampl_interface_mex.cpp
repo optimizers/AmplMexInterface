@@ -1,7 +1,7 @@
-#include "mex.h"
 #include "class_handle.hpp"
 #undef printf
 #include "asl/asl_pfgh.h"
+#include "mex.h"
 
 // The class that we are interfacing to
 class dummy {
@@ -13,11 +13,26 @@ public:
 private:
 };
 
-static real*
-sizechk(const mxArray *mp, const char *who, fint m)
+extern "C" { 
+    double ddot_(
+    size_t *n,
+    double *dx,
+    size_t *incx,
+    double *dy,
+    size_t *incy
+);
+};
+
+static double*
+getDense(const mxArray *mp, const char *who, mwSize m)
 {
     char msgbuf[256];
-    int m1, n1;
+    mwSize m1, n1;
+    
+    if (mxIsSparse(mp)) {
+        sprintf(msgbuf,"Expected %s to be a dense matrix",who);
+        mexErrMsgTxt(msgbuf);
+    }
     m1 = mxGetM(mp);
     n1 = mxGetN(mp);
     if (m1 != m || (n1 != 1 && m1)) {
@@ -34,7 +49,8 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     dummy* AC;
     ASL *asl;
     char *buf1, buf[512], msgbuf[256];
-    int nerror = 0, n, nc, nz;
+    int nerror = 0;
+    mwSize i, n, nc, nz;
 
     // Get the command string.
     char cmd[64];
@@ -126,7 +142,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     // Command: objective
     // -----------------------------------------------------------------
     if (!strcmp("obj", cmd)) {
-        double *x = sizechk(prhs[2], "x", n);
+        double *x = getDense(prhs[2], "x", n);
         double *f = mxGetPr(plhs[0] = mxCreateDoubleMatrix(1, 1, mxREAL));
         *f = objval(0, x, &nerror);
         if (nerror)
@@ -138,7 +154,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     // Command: gradient
     // -----------------------------------------------------------------
     if (!strcmp("grad", cmd)) {
-        double *x = sizechk(prhs[2], "x", n);
+        double *x = getDense(prhs[2], "x", n);
         double *g = mxGetPr(plhs[0] = mxCreateDoubleMatrix(n, 1, mxREAL));
         objgrd(0, x, g, &nerror);
         if (nerror)
@@ -151,7 +167,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     // -----------------------------------------------------------------
     if (!strcmp("con", cmd)) {
 
-        double *x = sizechk(prhs[2], "x", n);
+        double *x = getDense(prhs[2], "x", n);
         double *c = mxGetPr(plhs[0] = mxCreateDoubleMatrix(nc, 1, mxREAL));
         conval(x, c, &nerror);
         if (nerror)
@@ -165,7 +181,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     if (!strcmp("jac", cmd)) {
 
         cgrad *cg, **cgp, **cgpe;
-        double *x = sizechk(prhs[2], "x", n);
+        double *x = getDense(prhs[2], "x", n);
         double *J1 = mxGetPr(plhs[0] = mxCreateDoubleMatrix(nc, n, mxREAL));
         if (nc) {
             memset(J1, 0, AC->Jsize);
@@ -195,7 +211,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     // -----------------------------------------------------------------
     if (!strcmp("hesslag", cmd)) {
 
-        double *y = sizechk(prhs[2], "y", nc);
+        double *y = getDense(prhs[2], "y", nc);
         double *H = mxGetPr(plhs[0] = mxCreateDoubleMatrix(n, n, mxREAL));
 	fullhes(H, n, 0, 0, y);
         return;
@@ -206,7 +222,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     // -----------------------------------------------------------------
     if (!strcmp("hesscon", cmd)) {
 
-        double *y = sizechk(prhs[2], "y", nc);
+        double *y = getDense(prhs[2], "y", nc);
         double *H = mxGetPr(plhs[0] = mxCreateDoubleMatrix(n, n, mxREAL));
 	fullhes(H, n, -1, NULL, y);
         return;
@@ -232,32 +248,20 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     // -----------------------------------------------------------------
     if (!strcmp("ghivprod", cmd)) {
         
-        double *x = sizechk(prhs[2], "x", n);
-        double *g = sizechk(prhs[3], "g", n);
-        double *v = sizechk(prhs[4], "v", n);
-        double *y =  (double*)calloc(nc, sizeof(double));
-        double *hv = (double*)calloc(n , sizeof(double));
+        double *x = getDense(prhs[2], "x", n);
+        double *g = getDense(prhs[3], "g", n);
+        double *v = getDense(prhs[4], "v", n);
+        double *hv = (double*)mxMalloc(n*sizeof(double));
         double *gHiv = mxGetPr(plhs[0] = mxCreateDoubleMatrix(nlc, 1, mxREAL));
-
+        size_t one = 1;
+        size_t nn = n;
         xknown(x);
-        for (int i=0; i<nlc; i++) {
-            // Set vector of multipliers to (0, 0, ..., -1, 0, ..., 0)
-            y[i] = -1.0;
-
-            // Compute Hi*v by setting OW to NULL.
-            hvpinit_ASL((ASL*)asl, ihd_limit, -1, NULL, y);
-            hvcomp(hv, v, -1, NULL, y);
-
-            // Compute dot product (g, Hi*v). Should use BLAS!
-            gHiv[i] = 0;
-            for (int j=0; j<n; j++) gHiv[i] += hv[j]*g[j];
-
-            // Reset i-th multiplier.
-            y[i] = 0.0;
+        for (i = 0; i < nlc; i++) {
+            hvcompd(hv, v, i);
+            gHiv[i] = ddot_(&nn, hv, &one, g, &one);
         }
         xunknown();
-        free(y);
-        free(hv);
+        mxFree(hv);
         return;
     }
 
