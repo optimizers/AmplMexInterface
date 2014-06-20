@@ -4,7 +4,7 @@ MCFLAGS = -largeArrayDims -lmwblas
 #MCFLAGS = -f $(HOME)/matlab/gccR12.sh
 MEX_INTERFACES = ampl_interface_mex spam_interface_mex
 
-AMPL    = /usr/local/Cellar/asl/20140617
+AMPL    = $(shell brew --prefix asl)
 
 all: ${MEX_INTERFACES}
 
