@@ -1,10 +1,11 @@
-CC      = gcc
-MEX     = /Applications/MATLAB_R2014a.app/bin/mex
-MCFLAGS = -largeArrayDims -lmwblas
-#MCFLAGS = -f $(HOME)/matlab/gccR12.sh
+include Makefile.user
+
+CC       = gcc
+MEX      = $(MATLAB)/bin/mex
+MCFLAGS += -largeArrayDims -lmwblas
 MEX_INTERFACES = ampl_interface_mex spam_interface_mex
 
-AMPL    = /usr/local/Cellar/asl/20140617
+AMPL    = $(shell brew --prefix asl)
 
 all: ${MEX_INTERFACES}
 
