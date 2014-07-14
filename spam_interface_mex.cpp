@@ -12,7 +12,7 @@ public:
 private:
 };
 
-extern "C" { 
+extern "C" {
     double ddot_(
     size_t *n,
     double *dx,
@@ -27,7 +27,7 @@ getDense(const mxArray *mp, const char *who, mwSize m)
 {
     char msgbuf[256];
     mwSize m1, n1;
-    
+
     if (mxIsSparse(mp)) {
         sprintf(msgbuf,"Expected %s to be a dense matrix",who);
         mexErrMsgTxt(msgbuf);
@@ -63,7 +63,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     // Command: New
     // -----------------------------------------------------------------
     if (!strcmp("new", cmd)) {
-        
+
         FILE *nl;
 
         // Return a handle to a new C++ instance
@@ -72,7 +72,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
 
         // Allocate the ASL object.
         if (mxGetString(prhs[1], buf1 = buf, sizeof(buf)))
-            mexErrMsgTxt("Expected 'stub' as argument\n");        
+            mexErrMsgTxt("Expected 'stub' as argument\n");
         asl = AC->asl = ASL_alloc(ASL_read_pfgh);
         return_nofile = 1;
         if (!(nl = jac0dim(buf1,strlen(buf)))) {
@@ -109,7 +109,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
 
         return;
     }
-    
+
     // -----------------------------------------------------------------
     // Retrieve C++ object, and unpack it.
     // -----------------------------------------------------------------
@@ -141,7 +141,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
             mexWarnMsgTxt("Delete: Unexpected arguments ignored.");
         return;
     }
-    
+
     // -----------------------------------------------------------------
     // Command: objective
     // -----------------------------------------------------------------
@@ -167,7 +167,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
             mexErrMsgTxt("Trouble evaluating g\n");
         return;
     }
- 
+
     // -----------------------------------------------------------------
     // Command: constraint
     // -----------------------------------------------------------------
@@ -229,7 +229,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
             *Ir++ = *hr++;
         }
         return;
-    } 
+    }
 
     // -----------------------------------------------------------------
     // Command: Hessian of Lagrangian
@@ -253,7 +253,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
             *Ir++ = *hr++;
         }
         return;
-    } 
+    }
 
     // // -----------------------------------------------------------------
     // // Command: Hessian of constraint, sum_i H_i y_i.
@@ -283,7 +283,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
         nhnz = AC->nhnz = sphsetup(0, 0, nc > 0, 0);
 
         return;
-    } 
+    }
 
     // -----------------------------------------------------------------
     // Command: lagscale
@@ -304,7 +304,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     // are Hessians of the constraints.
     // -----------------------------------------------------------------
     if (!strcmp("ghivprod", cmd)) {
-        
+
         double *x = getDense(prhs[2], "x", n);
         double *g = getDense(prhs[3], "g", n);
         double *v = getDense(prhs[4], "v", n);
@@ -326,7 +326,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     // Command: hesslagprod.  (H - sum_i H_i y_i) v
     // -----------------------------------------------------------------
     if (!strcmp("hesslagprod", cmd)) {
-        
+
         double *y = getDense(prhs[2], "y", nc);
         double *v = getDense(prhs[3], "v", n);
         double *hv = mxGetPr(plhs[0] = mxCreateDoubleMatrix(n, 1, mxREAL));
@@ -340,7 +340,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     // Command: hessconprod.  sum_i(H_i y_i) v.
     // -----------------------------------------------------------------
     if (!strcmp("hessconprod", cmd)) {
-        
+
         double *y = getDense(prhs[2], "y", nc);
         double *v = getDense(prhs[3], "v", n);
         double *hv = mxGetPr(plhs[0] = mxCreateDoubleMatrix(n, 1, mxREAL));
