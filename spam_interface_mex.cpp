@@ -351,6 +351,21 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     }
 
     // -----------------------------------------------------------------
+    // Command: write_sol.  Write solution to file.
+    // -----------------------------------------------------------------
+    if (!strcmp("write_sol", cmd)) {
+
+        if (mxGetString(prhs[2], buf, sizeof(buf)))
+            mexErrMsgTxt("Error while retrieving message.");
+
+        double *x = getDense(prhs[3], "x", n);
+        double *y = getDense(prhs[4], "y", nc);
+
+        write_sol(buf, x, y, 0);
+        return;
+    }
+
+    // -----------------------------------------------------------------
     // Got here, so command not recognized
     // -----------------------------------------------------------------
     mexErrMsgTxt("Command not recognized.");

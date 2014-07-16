@@ -39,7 +39,13 @@ classdef ampl_interface < handle
          end
          self.interface('delete', self.oH);
       end
-      
+
+      function write_sol(self, msg, x, y)
+         if issparse(x), x = full(x); end
+         if issparse(y), y = full(y); end
+         self.interface('write_sol', self.oH, msg, x, y);
+      end
+
       function f = obj(self, x)
          if issparse(x), x = full(x); end
          f = self.interface('obj', self.oH, x);
