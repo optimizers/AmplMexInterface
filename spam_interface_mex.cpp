@@ -48,7 +48,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     dummy* AC;
     ASL *asl;
     char *buf1, buf[512], msgbuf[256];
-    int nerror = 0;
+    fint nerror = 0;
     mwSize i, j, n, nc, nz, nhnz;
     mwIndex *Ir, *Jc;
     double *Hsp, *He, *H, *W;
