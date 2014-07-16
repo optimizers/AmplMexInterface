@@ -1,16 +1,16 @@
 %AMPL_INTERFACE Interface to the AMPL solver library.
 classdef ampl_interface < handle
-   
+
    properties (SetAccess = private, Hidden = true)
       oH        % handle to the underlying C++ class instance
       interface % handle to dense or sparse interface
    end
-   
+
    properties
       x0, bl, bu, v, cl, cu, nlc
       sigma     % scale of the Lagrangian
    end
-   
+
    methods
       function self = ampl_interface(model, sparse)
          % Constructor   Create the ampl model instance.
@@ -20,7 +20,7 @@ classdef ampl_interface < handle
          else
             self.interface = @ampl.ampl_interface_mex;
          end
-         
+
          [self.oH,...
             self.x0, self.bl, self.bu,...
             self.v, self.cl, self.cu, self.nlc] = ...
@@ -30,13 +30,13 @@ classdef ampl_interface < handle
          self.sigma = -1;
          self.lagscale(self.sigma);
       end
-      
+
       function delete(self)
          % Destructor   Destroy the ampl model instance.
          if isempty(self.oH)
             % No need to delete if the constructor failed.
             return
-         end            
+         end
          self.interface('delete', self.oH);
       end
       
@@ -49,26 +49,26 @@ classdef ampl_interface < handle
          if issparse(x), x = full(x); end
          g = self.interface('grad', self.oH, x);
       end
-      
+
       function H = hessobj(self, x)  %#ok<INUSD>
          H = self.interface('hessobj', self.oH);
       end
-      
+
       function c = con(self, x)
          if issparse(x), x = full(x); end
          c = self.interface('con', self.oH, x);
       end
-      
+
       function J = jac(self, x)
          if issparse(x), x = full(x); end
          J = self.interface('jac', self.oH, x);
       end
-      
+
       function HL = hesslag(self, y)
          if issparse(y), y = full(y); end
          HL = self.interface('hesslag', self.oH, y);
       end
-      
+
       function Hv = hesslagprod(self, y, v)
          if issparse(y), y = full(y); end
          if issparse(v), v = full(v); end
@@ -98,7 +98,7 @@ classdef ampl_interface < handle
          if issparse(v), v = full(v); end
          gHiv = self.interface('ghivprod', self.oH, x, g, v);
       end
-      
+
       function lagscale(self, scale)
          %LAGSCALE Set the scale of the Lagrangian.
          %
