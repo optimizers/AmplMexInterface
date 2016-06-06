@@ -10,7 +10,7 @@ AMPL    = $(shell brew --prefix asl)
 all: ${MEX_INTERFACES}
 
 ${MEX_INTERFACES}:
-	$(MEX) $(MCFLAGS) -I$(AMPL)/include $@.cpp -L$(AMPL)/lib -lasl -lfuncadd0
+	$(MEX) $(MCFLAGS) -I$(AMPL)/include $@.cpp -L$(AMPL)/lib -lasl
 
 clean:
 	rm -rf *.o *~
