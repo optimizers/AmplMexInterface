@@ -57,7 +57,9 @@ classdef ampl_interface < handle
       end
 
       function H = hessobj(self, x)  %#ok<INUSD>
-         H = self.interface('hessobj', self.oH);
+         y = zeros(size(self.cl));
+         H = self.interface('hesslag', self.oH, y, 1);  % upper triangle only
+         H = H + triu(H, 1)';  % symmetrize
       end
 
       function c = con(self, x)
@@ -70,15 +72,20 @@ classdef ampl_interface < handle
          J = self.interface('jac', self.oH, x);
       end
 
-      function HL = hesslag(self, y)
+      function HL = hesslag(self, y, varargin)
          if issparse(y), y = full(y); end
-         HL = self.interface('hesslag', self.oH, y);
+         ow = 1;
+         if nargin > 2, ow = varargin{3}; end
+         HL = self.interface('hesslag', self.oH, y, ow);  % upper triangle only
+         HL = HL + triu(HL, 1)';
       end
 
-      function Hv = hesslagprod(self, y, v)
+      function Hv = hesslagprod(self, y, v, varargin)
          if issparse(y), y = full(y); end
          if issparse(v), v = full(v); end
-         Hv = self.interface('hesslagprod', self.oH, y, v);
+         ow = 1;
+         if nargin > 3, ow = varargin{4}; end
+         Hv = self.interface('hesslagprod', self.oH, y, v, ow);
       end
 
       function HC = hesscon(self, y)
@@ -86,7 +93,8 @@ classdef ampl_interface < handle
             y = -y;
          end
          if issparse(y), y = full(y); end
-         HC = self.interface('hesscon', self.oH, y);
+         HC = self.interface('hesslag', self.oH, y, 0);  % upper triangle only
+         HC = HC + triu(HC, 1)';
       end
 
       function Hv = hessconprod(self, y, v)
@@ -94,7 +102,7 @@ classdef ampl_interface < handle
             y = -y;
          end
          if issparse(y), y = full(y); end
-         Hv = self.interface('hessconprod', self.oH, y, v);
+         Hv = self.interface('hesslagprod', self.oH, y, v, 0);
       end
 
       function gHiv = ghivprod(self, x, g, v)
