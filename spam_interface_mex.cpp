@@ -173,18 +173,28 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     }
 
     // -----------------------------------------------------------------
-    // Command: jacobian
+    // Command: jacobian in coordinate format
     // -----------------------------------------------------------------
-    if (!strcmp("jac", cmd)) {
+    if (!strcmp("jac_coord", cmd)) {
 
         double *x = getDense(prhs[2], "x", nvar);
-        plhs[0] = mxCreateSparse(ncon, nvar, nnzj, mxREAL);
-        double *vals = mxGetPr(plhs[0]);
-        mwIndex *rows = mxGetIr(plhs[0]);
-        mwIndex *cols = mxGetJc(plhs[0]);
+        double *rows = mxGetPr(plhs[0] = mxCreateDoubleMatrix(nnzj, 1, mxREAL));
+        double *cols = mxGetPr(plhs[1] = mxCreateDoubleMatrix(nnzj, 1, mxREAL));
+        double *vals = mxGetPr(plhs[2] = mxCreateDoubleMatrix(nnzj, 1, mxREAL));
 
-        asl_jac(asl, x, (int64_t*)rows, (int64_t*)cols, vals, &err);
+        // is there a more elegant way?!
+        int64_t *irows = (int64_t*)malloc(nnzj * sizeof(int64_t));
+        int64_t *jcols = (int64_t*)malloc(nnzj * sizeof(int64_t));
+
+        asl_jac(asl, x, irows, jcols, vals, &err);
         if (err) mexErrMsgTxt("Trouble evaluating constraints Jacobian\n");
+
+        for (i = 0; i < nnzj; i++) {
+          rows[i] = irows[i] + 1;
+          cols[i] = jcols[i] + 1;  // 1-based indexing
+        }
+        free(irows);
+        free(jcols);
 
         return;
     }

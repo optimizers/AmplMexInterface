@@ -69,7 +69,9 @@ classdef ampl_interface < handle
 
       function J = jac(self, x)
          if issparse(x), x = full(x); end
-         J = self.interface('jac', self.oH, x);
+         %  J = self.interface('jac', self.oH, x);
+         [rows, cols, vals] = self.interface('jac_coord', self.oH, x);
+         J = sparse(rows, cols, vals, length(self.v), length(self.x0));
       end
 
       function HL = hesslag(self, y, varargin)
