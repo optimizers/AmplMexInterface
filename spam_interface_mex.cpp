@@ -204,18 +204,25 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     // -----------------------------------------------------------------
     if (!strcmp("hesslag", cmd)) {
 
-        plhs[0] = mxCreateSparse(nvar, nvar, nnzh, mxREAL);
-        double *vals = mxGetPr(plhs[0]);
-        mwSize *rows = mxGetIr(plhs[0]);
-        mwSize *cols = mxGetJc(plhs[0]);
         double *y = getDense(prhs[2], "y", ncon);
         double ow = mxGetScalar(prhs[3]);
+
+        double *rows = mxGetPr(plhs[0] = mxCreateDoubleMatrix(nnzh, 1, mxREAL));
+        double *cols = mxGetPr(plhs[1] = mxCreateDoubleMatrix(nnzh, 1, mxREAL));
+        double *vals = mxGetPr(plhs[2] = mxCreateDoubleMatrix(nnzh, 1, mxREAL));
+
+        int64_t *irows = (int64_t*)malloc(nnzh * sizeof(int64_t));
+        int64_t *jcols = (int64_t*)malloc(nnzh * sizeof(int64_t));
+
         ow = asl->i.objtype_[0] ? -ow : ow;  // Objective weight.
+        asl_hess(asl, y, ow, irows, jcols, vals);
 
-        asl->p.Sphes(asl, 0, vals, -1, &ow, y);
-
-        for (i = 0; i <= nvar; i++) cols[i] = asl->i.sputinfo_->hcolstarts[i];
-        for (i = 0; i <  nnzh; i++) rows[i] = asl->i.sputinfo_->hrownos[i];
+        for (i = 0; i < nnzh; i++) {
+          rows[i] = irows[i] + 1;
+          cols[i] = jcols[i] + 1;
+        }
+        free(irows);
+        free(jcols);
 
         return;
     }

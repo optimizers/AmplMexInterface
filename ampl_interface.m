@@ -58,7 +58,10 @@ classdef ampl_interface < handle
 
       function H = hessobj(self, x)  %#ok<INUSD>
          y = zeros(size(self.cl));
-         H = self.interface('hesslag', self.oH, y, 1);  % upper triangle only
+         % H = self.interface('hesslag', self.oH, y, 1);  % upper triangle only
+         n = length(self.x0);
+         [rows, cols, vals] = self.interface('hesslag', self.oH, y, 1);
+         H = sparse(rows, cols, vals, n, n);  % upper triangle only
          H = H + triu(H, 1)';  % symmetrize
       end
 
@@ -78,7 +81,10 @@ classdef ampl_interface < handle
          if issparse(y), y = full(y); end
          ow = 1;
          if nargin > 2, ow = varargin{3}; end
-         HL = self.interface('hesslag', self.oH, y, ow);  % upper triangle only
+         %  HL = self.interface('hesslag', self.oH, y, ow);  % upper triangle only
+         n = length(self.x0);
+         [rows, cols, vals] = self.interface('hesslag', self.oH, y, ow);
+         HL = sparse(rows, cols, vals, n, n);  % upper triangle only
          HL = HL + triu(HL, 1)';
       end
 
@@ -95,7 +101,10 @@ classdef ampl_interface < handle
             y = -y;
          end
          if issparse(y), y = full(y); end
-         HC = self.interface('hesslag', self.oH, y, 0);  % upper triangle only
+         %  HC = self.interface('hesslag', self.oH, y, 0);  % upper triangle only
+         n = length(self.x0);
+         [rows, cols, vals] = self.interface('hesslag', self.oH, y, 0);
+         HC = sparse(rows, cols, vals, n, n);  % upper triangle only
          HC = HC + triu(HC, 1)';
       end
 
