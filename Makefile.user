@@ -1,5 +1,5 @@
 # Matlab location. Should contain bin/ subdirectory.
-MATLAB = /Applications/Matlab/MATLAB_R2015b.app
+MATLAB = /Applications/MATLAB_R2016a.app
 
 # Non-default Mex flags. See Makefile for default flags.
 MCFLAGS = #-f $(MATLAB)/bin/mexopts.sh
